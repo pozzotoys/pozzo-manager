@@ -25,6 +25,8 @@ Files in this repo: `index.html`, `orders.html`, `stock.html`, `stickers.html`, 
 7. Choose **installDailyEmail** and tap **Run**. This sends the stock check email at 9 PM Dhaka time to this account.
 8. Tap **Deploy**, then **New deployment**, the gear icon, **Web app**. Set **Execute as: Me** and **Who has access: Anyone**. Tap **Deploy** and copy the Web app link (it ends with `/exec`).
 
+If you ever delete the Stock or a Sales file in Drive, run **clearCache** and then **setup**, so the script forgets the old file.
+
 To change the script later: **Deploy**, **Manage deployments**, the pencil, **Version: New version**, **Deploy**. The link stays the same.
 
 ### B. GitHub
@@ -42,6 +44,22 @@ To update later: upload the changed files and commit. Open the app twice to load
 2. Sales tab, **Connection settings**. Paste the Web app link and your secret key. Save.
 
 ---
+
+## Updating from v2 to v3
+
+1. Upload all the changed files to GitHub and commit. Open the app twice.
+2. In the script editor, replace the whole script with the new `pozzo-script.txt`, set your key on line 1, and keep `"timeZone": "Asia/Dhaka"` in `appsscript.json`.
+3. Run **setup** once. It adds the new column headings to the Purchases tab. Your data is not changed.
+4. **Deploy**, **Manage deployments**, the pencil, **Version: New version**, **Deploy**.
+
+## What is new in v3
+
+- **Faster Stock page.** One request loads everything. Switching between Stock, To check and Issues no longer asks Google again. Use **↻ Refresh** to force a fresh load. The script remembers where the files are and keeps the list ready for 5 minutes, so right after you change something on another device, tap Refresh.
+- **No more jams.** Reading requests no longer wait for the lock. The app sends one request at a time, shows "Working…", and after 45 seconds says "Google is slow to answer" with a **Try again** button.
+- **Sales.** The memo appears as soon as the order is saved. Stock updates in the background ("Updating stock…"). The parcel file asks "Did the parcel file download?" before marking orders as exported.
+- **Voiding a purchase** now puts back the average cost, and the old selling price when no later change touched it. The message says what was restored.
+- **New memo design** (sky blue, white page, your logo).
+- **Slow requests:** open **Executions** in the script editor, open a row, and the log shows the action name and how long it took.
 
 ## First-run tests (do these before real orders)
 

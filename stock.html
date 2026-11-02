@@ -85,6 +85,7 @@ table.t th{color:var(--mut);font-weight:500;border-top:0}
 .sum.g{border-top:1px solid var(--line);margin-top:6px;padding-top:14px;font-size:20px;font-weight:700}
 .sum.g span:last-child{font-size:30px;font-family:Georgia,serif}
 .err{color:var(--bad);font-size:15px;margin:0 0 12px}
+#busy{position:fixed;top:10px;left:50%;transform:translateX(-50%);background:var(--grn);color:#fff;padding:6px 16px;border-radius:999px;font-size:13px;z-index:60}
 .cd{font-family:Georgia,serif;font-weight:700;font-size:18px;letter-spacing:.06em;color:var(--grn)}
 .cd.big{font-size:30px;margin-bottom:2px}
 .pick{border:1.5px solid var(--line);border-radius:18px;padding:12px 14px;margin-top:10px;background:var(--in)}
@@ -99,25 +100,34 @@ table.t th{color:var(--mut);font-weight:500;border-top:0}
 <main id="app"></main>
 <div class="bar" id="bar"><button class="btn p" onclick="ui.newPurchase()">+ New purchase</button><button class="btn" onclick="ui.more()">More</button></div>
 <div id="modal" class="modal" hidden></div>
+<div id="busy" hidden>Working…</div>
 <div id="toast" class="toast" hidden></div>
 <script>
-const VER="v2";
+const VER="v3";
 const $=s=>document.querySelector(s);
 const esc=s=>String(s==null?"":s).replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;");
 const num=v=>{const n=parseFloat(String(v).replace(/[,৳\s]|tk/gi,""));return isNaN(n)?0:n};
 const tk=n=>"৳ "+(Math.round(n*100)/100).toLocaleString("en-US");
 function today(){const t=new Date(),p=n=>String(n).padStart(2,"0");return t.getFullYear()+"-"+p(t.getMonth()+1)+"-"+p(t.getDate())}
 const cfg=()=>{try{return JSON.parse(localStorage.getItem("pt_cfg")||"{}")}catch(e){return{}}};
-async function api(payload){
+let CHAIN=Promise.resolve(),INFLIGHT=0;
+const busy=()=>{const b=$("#busy");if(b)b.hidden=INFLIGHT===0};
+function api(payload){
+  INFLIGHT++;busy();
+  const run=CHAIN.then(()=>apiRaw(payload));
+  CHAIN=run.catch(()=>{});
+  return run.finally(()=>{INFLIGHT--;busy()});
+}
+async function apiRaw(payload){
   const c=cfg();if(!c.url||!c.key)return {ok:false,error:"nocfg"};
   const ac=new AbortController(),t=setTimeout(()=>ac.abort(),45000);
   try{
     const r=await fetch(c.url,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify(Object.assign({key:c.key},payload)),signal:ac.signal});
     return await r.json();
-  }catch(e){return {ok:false,error:"no connection"}}
+  }catch(e){return {ok:false,error:e&&e.name==="AbortError"?"slow":"no connection"}}
   finally{clearTimeout(t)}
 }
-const errText=e=>e==="nocfg"?"The Google Sheet is not connected. Open Connection settings on the Sales tab.":e==="no connection"?"Could not reach the Google Sheet. Check your internet.":e;
+const errText=e=>e==="nocfg"?"The Google Sheet is not connected. Open Connection settings on the Sales tab.":e==="no connection"?"Could not reach the Google Sheet. Check your internet.":e==="slow"?"Google is slow to answer. Tap Try again.":e;
 function toast(m){const t=$("#toast");t.textContent=m;t.hidden=false;clearTimeout(toast.h);toast.h=setTimeout(()=>t.hidden=true,3200)}
 
 let S={products:[],counts:{units:0,value:0,low:0,tocheck:0,issues:0},suppliers:[],url:""};
@@ -127,13 +137,16 @@ const prod=id=>S.products.find(p=>p.id===id);
 const stat=p=>p.stock<=0?"out":p.stock<=p.low?"low":"ok";
 const ui={};
 
-async function load(){
-  const j=await api({action:"products"});
-  if(!j.ok){loadErr=errText(j.error);render();return}
-  loadErr="";S=j;
-  if(tab==="check"){const c=await api({action:"tocheck"});if(c.ok)CHK=c.items}
-  if(tab==="issues"){const c=await api({action:"issues"});if(c.ok)ISS=c.items}
-  render();
+let LOADING=false;
+async function load(fresh){
+  if(LOADING)return;
+  LOADING=true;
+  try{
+    const j=await api({action:"stockload",fresh:!!fresh});
+    if(!j.ok){loadErr=errText(j.error);render();return}
+    loadErr="";S=j;CHK=j.tocheck||[];ISS=j.issues||[];
+    render();
+  }finally{LOADING=false}
 }
 function render(){
   $("#bar").hidden=view!=="main";
@@ -145,7 +158,8 @@ function render(){
 }
 function renderMain(){
   const c=S.counts;
-  $("#app").innerHTML=`${loadErr?`<div class="warnbox bad">${esc(loadErr)}</div>`:""}
+  $("#app").innerHTML=`${loadErr?`<div class="warnbox bad">${esc(loadErr)}<br><button class="btn" style="margin-top:10px" onclick="ui.retry()">Try again</button></div>`:""}
+  <div style="text-align:right;margin:0 0 8px"><button class="chip" style="padding:6px 14px;border-radius:999px;border:1px solid var(--line);background:var(--card)" onclick="ui.retry()">↻ Refresh</button></div>
   <div class="cards">
     <div class="stat"><small>Units in stock</small><b>${c.units}</b></div>
     <div class="stat"><small>Stock value (at cost)</small><b>${tk(c.value)}</b></div>
@@ -158,7 +172,8 @@ function renderMain(){
   <div id="body"></div>`;
   ({stock:stockView,check:checkView,issues:issuesView})[tab]();
 }
-ui.tab=async t=>{tab=t;openId=null;await load()};
+ui.tab=t=>{tab=t;openId=null;render()};
+ui.retry=()=>load(true);
 
 /* ---------- stock tab ---------- */
 function stockView(){
@@ -432,7 +447,7 @@ ui.confirmPurchase=async()=>{
   const j=await api({action:"purchase",reqId:PLAN.req,date:PUR.date,supplier:PLAN.sup,lines:lines});
   if(!j.ok){if(btn){btn.disabled=false;btn.textContent="✓ Confirm all and save"}return bad(errText(j.error))}
   if(j.repeat)toast("This purchase was already saved. Nothing was added twice.");
-  const sj=await api({action:"products"});if(sj.ok)S=sj;
+  const sj=await api({action:"stockload",fresh:true});if(sj.ok){S=sj;CHK=sj.tocheck||[];ISS=sj.issues||[]}
   const rj=await api({action:"purchases"});if(rj.ok)RECENT=rj.items;
   const sup=PLAN.sup;PLAN=null;
   PUR={date:today(),supplier:sup,newSupplier:"",lines:[blankLine()]};
@@ -446,8 +461,8 @@ ui.voidP=async id=>{
   if(!confirm("Void "+id+"? The stock it added is taken off again. The record stays for the history."))return;
   const j=await api({action:"voidpurchase",id:id});
   if(!j.ok)return toast(errText(j.error));
-  toast("Voided.");
-  const sj=await api({action:"products"});if(sj.ok)S=sj;
+  toast("Voided."+(j.notes&&j.notes.length?" "+j.notes.join(" · "):""));
+  const sj=await api({action:"stockload",fresh:true});if(sj.ok){S=sj;CHK=sj.tocheck||[];ISS=sj.issues||[]}
   const rj=await api({action:"purchases"});if(rj.ok)RECENT=rj.items;
   renderPurchase();
 };
@@ -553,8 +568,8 @@ ui.confirmImport=async()=>{
   if(!rows.length){toast("Nothing to import.");return}
   const btn=document.querySelector(".acts .btn.p");if(btn){btn.disabled=true;btn.textContent="Importing…"}
   let created=0,skipped=0;
-  for(let i=0,k=0;i<rows.length;i+=20,k++){
-    const j=await api({action:"import",reqId:IPLAN.req+"-"+k,rows:rows.slice(i,i+20)});
+  for(let i=0,k=0;i<rows.length;i+=15,k++){
+    const j=await api({action:"import",reqId:IPLAN.req+"-"+k,rows:rows.slice(i,i+15)});
     if(!j.ok){if(btn){btn.disabled=false;btn.textContent="✓ Confirm import"}return bad("Stopped after "+created+" products. "+errText(j.error)+" Tap Confirm again to continue. Products already saved are not repeated.")}
     created+=j.created;skipped+=j.skipped;
   }

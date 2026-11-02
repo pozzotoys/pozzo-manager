@@ -68,7 +68,7 @@ pre{white-space:pre-wrap;background:#ede6db;border-radius:18px;padding:16px;font
 </div>
 
 <script>
-const VER="v12";
+const VER="v13";
 const $=s=>document.querySelector(s);
 const esc=s=>String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;");
 const num=v=>{const n=parseFloat(String(v).replace(/,/g,""));return isNaN(n)?0:n};
@@ -82,13 +82,19 @@ const persist=()=>{try{localStorage.setItem("pt_orders",JSON.stringify(orders));
 const cfg=()=>{try{return JSON.parse(localStorage.getItem("pt_cfg")||"{}")}catch(e){return{}}};
 const setCfg=c=>{try{localStorage.setItem("pt_cfg",JSON.stringify(c))}catch(e){}};
 
-async function callScript(payload){
+let CHAIN=Promise.resolve();
+function callScript(payload){
+  const run=CHAIN.then(()=>callRaw(payload));
+  CHAIN=run.catch(()=>{});
+  return run;
+}
+async function callRaw(payload){
   const c=cfg();if(!c.url||!c.key)return {ok:false,error:"nocfg"};
   const ac=new AbortController(),t=setTimeout(()=>ac.abort(),45000);
   try{
     const r=await fetch(c.url,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify(Object.assign({key:c.key},payload)),signal:ac.signal});
     return await r.json();
-  }catch(e){return {ok:false,error:"no connection"}}
+  }catch(e){return {ok:false,error:e&&e.name==="AbortError"?"slow":"no connection"}}
   finally{clearTimeout(t)}
 }
 const stockQ=()=>{try{return JSON.parse(localStorage.getItem("pt_stockq")||"[]")}catch(e){return[]}};
@@ -98,14 +104,19 @@ async function stockPost(order){
   if(!j.ok&&j.error!=="nocfg"){const q=stockQ();if(!q.some(x=>x.id===order.id)){q.push(order);setStockQ(q)}}
   return j;
 }
+let RETRYING=false;
 async function retryStock(){
-  const q=stockQ();if(!q.length)return;
-  const left=[];
-  for(const o of q){const j=await callScript({action:"stockpost",order:o});if(!j.ok)left.push(o)}
-  setStockQ(left);
+  if(RETRYING)return;
+  RETRYING=true;
+  try{
+    for(const o of stockQ().slice()){
+      const j=await callScript({action:"stockpost",order:o});
+      if(j.ok)setStockQ(stockQ().filter(x=>x.id!==o.id));
+    }
+  }finally{RETRYING=false}
 }
 const stockMsg=j=>j.ok?(j.skipped?"":" Stock: "+j.matched+" matched"+(j.issues?", "+j.issues+" to look at in the Stock tab":"")+"."):" The stock update is waiting and will be retried.";
-const errText=e=>e==="nocfg"?"The Google Sheet is not connected. Open Connection settings on the home screen.":e==="no connection"?"Could not reach the Google Sheet. Check your internet and try again.":e;
+const errText=e=>e==="nocfg"?"The Google Sheet is not connected. Open Connection settings on the home screen.":e==="no connection"?"Could not reach the Google Sheet. Check your internet and try again.":e==="slow"?"Google is slow to answer. If you were saving an order, open the sheet and check before saving again. An order that is already saved is never saved twice.":e;
 
 /* ---------- reading the message ---------- */
 const CUR="(?:৳|tk\\.?|taka|bdt)";
@@ -389,10 +400,14 @@ async function saveOrder(){
   orders.push({id:j.id,date:O.date,name:O.name,phone:O.phone,phone2:O.phone2||"",address:O.address,items:O.items,sub:O.sub,discount:O.discount,delivery:O.delivery,advance:O.advance||0,total:O.total,msgTotal:O.msgTotal});
   persist();
   if(j.url){const c=cfg();c.last=j.url;setCfg(c)}
-  const sp=await stockPost({id:j.id,date:O.date,items:O.items.map(i=>({name:i.name,qty:i.qty,price:i.price}))});
+  const stockOrder={id:j.id,date:O.date,items:O.items.map(i=>({name:i.name,qty:i.qty,price:i.price}))};
   const memoData={id:j.id,date:O.date,name:O.name,phone:O.phone,address:O.address,items:O.items.map(i=>({name:i.name,qty:i.qty,price:i.price})),discount:O.discount,delivery:O.delivery,advance:O.advance||0};
-  const note="Saved "+j.id+" for "+O.name+". Added to the Google Sheet."+(j.dup?" (This order was already in the sheet.)":"")+stockMsg(sp);
-  showMemo(memoData,note);
+  const note="Saved "+j.id+" for "+O.name+". Added to the Google Sheet."+(j.dup?" (This order was already in the sheet.)":"");
+  showMemo(memoData,note,true);
+  stockPost(stockOrder).then(sp=>{
+    const el=document.getElementById("stockline");
+    if(el&&MEMO&&MEMO.order.id===j.id)el.textContent=(stockMsg(sp).trim()||"Stock was already updated for this order.");
+  });
 }
 
 /* ---------- cash memo (drawn on a canvas, never stored) ---------- */
@@ -410,8 +425,8 @@ async function memoLogo(){
 }
 async function drawMemo(o){
   const W=800,P=44,IN=W-2*P;
-  const SANS='"Segoe UI","Noto Sans Bengali","Noto Sans",system-ui,sans-serif',SER='Georgia,"Times New Roman",serif';
-  const G="#2b4f48",INK="#1f1d1a",MUT="#7b756b",LINE="#e3ddd1";
+  const SANS='"Segoe UI","Noto Sans Bengali","Noto Sans",system-ui,sans-serif';
+  const BLUE="#1F6FA8",DEEP="#0F3F66",INK="#1C1B1F",MUT="#5F6368",LINE="#E3E5E8",CHIP="#DEEFFB",SOFT="#F5FAFE",COD="#E9F4FC",CODB="#BFDDF2";
   const items=o.items||[];
   const sub=items.reduce((s,i)=>s+i.qty*i.price,0);
   const disc=o.discount||0,del=o.delivery||0,adv=o.advance||0;
@@ -436,78 +451,78 @@ async function drawMemo(o){
     });
     return lines;
   };
-  let hdrH=0;
   function run(draw){
     const T=(txt,x,yy,font,color,align)=>{if(!draw)return;cx.font=font;cx.fillStyle=color;cx.textAlign=align||"left";cx.textBaseline="alphabetic";cx.fillText(txt,x,yy)};
-    const R=(x,yy,w,h,color,r)=>{if(!draw)return;cx.fillStyle=color;if(r&&cx.roundRect){cx.beginPath();cx.roundRect(x,yy,w,h,r);cx.fill()}else cx.fillRect(x,yy,w,h)};
-    let y=26;
-    if(draw)R(0,0,W,hdrH,"#ffffff");
-    if(logo){
-      const sc=Math.min(300/logo.naturalWidth,140/logo.naturalHeight),lw=logo.naturalWidth*sc,lh=logo.naturalHeight*sc;
-      if(draw)cx.drawImage(logo,(W-lw)/2,y,lw,lh);
-      y+=lh+14;
-    }
-    y+=30;T(SHOP.name,W/2,y,"700 34px "+SER,G,"center");
-    y+=32;T(SHOP.fb,W/2,y,"400 20px "+SANS,MUT,"center");
-    y+=28;T("Phone: "+SHOP.phone,W/2,y,"400 20px "+SANS,MUT,"center");
-    y+=24;hdrH=y;R(0,y,W,5,G);y+=5;
-    // memo band
-    R(0,y,W,88,"#e3eee9");
-    T("CASH MEMO",P,y+54,"700 30px "+SER,G);
-    T("Memo no: "+o.id,W-P,y+38,"600 22px "+SANS,INK,"right");
-    T("Date: "+memoDate(o.date),W-P,y+68,"400 20px "+SANS,MUT,"right");
-    y+=88+34;
-    // customer
-    const kv=(k,v)=>{
-      const f="400 22px "+SANS,ls=wrap(v||"-",f,IN-130);
-      T(k,P,y,"400 20px "+SANS,MUT);
-      ls.forEach((ln,i)=>T(ln,P+130,y+i*30,f,INK));
-      y+=ls.length*30+6;
+    const RR=(x,yy,w,h,r,fill,stroke)=>{
+      if(!draw)return;
+      cx.beginPath();
+      if(cx.roundRect)cx.roundRect(x,yy,w,h,r);else cx.rect(x,yy,w,h);
+      if(fill){cx.fillStyle=fill;cx.fill()}
+      if(stroke){cx.strokeStyle=stroke;cx.lineWidth=2;cx.stroke()}
     };
-    kv("Customer",o.name);kv("Phone",o.phone);kv("Address",o.address);
-    y+=6;R(P,y,IN,2,LINE);y+=34;
-    // products
-    T("Products",P,y,"700 22px "+SER,G);
-    T("Price × Qty = Amount",W-P,y,"400 18px "+SANS,MUT,"right");
-    y+=14;R(P,y,IN,1,LINE);y+=30;
+    const HR=yy=>{if(draw){cx.fillStyle=LINE;cx.fillRect(P,yy,IN,1)}};
+    let y=30;
+    if(logo){
+      const sc=Math.min(280/logo.naturalWidth,120/logo.naturalHeight),lw=logo.naturalWidth*sc,lh=logo.naturalHeight*sc;
+      if(draw)cx.drawImage(logo,(W-lw)/2,y,lw,lh);
+      y+=lh+16;
+    }else{y+=30;T(SHOP.name,W/2,y,"600 32px "+SANS,BLUE,"center");y+=16}
+    y+=16;T(SHOP.fb+" · "+SHOP.phone,W/2,y,"400 20px "+SANS,MUT,"center");
+    y+=40;
+    // title row
+    T("Cash memo",P,y+22,"600 32px "+SANS,BLUE);
+    cx.font="600 22px "+SANS;const cw=cx.measureText(o.id).width+36;
+    RR(W-P-cw,y-6,cw,40,20,CHIP);
+    T(o.id,W-P-cw/2,y+22,"600 22px "+SANS,DEEP,"center");
+    y+=64;T(memoDate(o.date),W-P,y,"400 20px "+SANS,MUT,"right");
+    y+=30;
+    // customer card
+    const addr=wrap(o.address||"-","400 22px "+SANS,IN-48);
+    const ch=26+34+34+addr.length*30+14;
+    RR(P,y,IN,ch,22,SOFT);
+    let cy=y+40;
+    T(o.name||"-",P+24,cy,"600 25px "+SANS,INK);cy+=36;
+    T(o.phone||"-",P+24,cy,"400 22px "+SANS,MUT);cy+=34;
+    addr.forEach(ln=>{T(ln,P+24,cy,"400 22px "+SANS,MUT);cy+=30});
+    y+=ch+30;
+    // items
     items.forEach(it=>{
-      const rt=num(it.price)+" × "+it.qty+" = "+num(it.price*it.qty);
-      cx.font="400 21px "+SANS;const rw=cx.measureText(rt).width;
-      const ls=wrap(it.name,"400 22px "+SANS,IN-rw-24);
-      ls.forEach((ln,i)=>T(ln,P,y+i*30,"400 22px "+SANS,INK));
-      T(rt,W-P,y,"400 21px "+SANS,INK,"right");
-      y+=ls.length*30+8;R(P,y-10,IN,1,LINE);
+      const qp=num(it.price)+" × "+it.qty,amt=num(it.price*it.qty);
+      cx.font="400 21px "+SANS;const qw=cx.measureText(qp).width;
+      const ls=wrap(it.name,"400 22px "+SANS,IN-130-qw-30);
+      ls.forEach((ln,i)=>T(ln,P+2,y+i*30,"400 22px "+SANS,INK));
+      T(qp,W-P-120,y,"400 21px "+SANS,MUT,"right");
+      T(amt,W-P-2,y,"500 22px "+SANS,INK,"right");
+      y+=ls.length*30+10;HR(y-8);y+=14;
     });
-    y+=14;
-    // totals
+    y+=4;
     const row=(k,v,big)=>{
-      T(k,P,y,big?"700 25px "+SER:"400 22px "+SANS,big?INK:MUT);
-      T(v,W-P,y,big?"700 25px "+SER:"400 22px "+SANS,INK,"right");
-      y+=big?44:36;
+      T(k,P+2,y,big?"600 26px "+SANS:"400 22px "+SANS,big?INK:MUT);
+      T(v,W-P-2,y,big?"600 26px "+SANS:"400 22px "+SANS,INK,"right");
+      y+=big?46:38;
     };
     row("Product value",num(sub));
     if(disc>0)row("Discount","− "+num(disc));
     row("Delivery",del>0?num(del):"Free");
-    y+=2;R(P,y-24,IN,1,LINE);y+=10;
     row("Total",num(total),true);
     if(adv>0)row("Advance paid","− "+num(adv));
-    // COD box
-    y+=8;const bh=cod>0?96:112;
-    R(P,y,IN,bh,G,18);
+    // COD block (light)
+    y+=6;const bh=cod>0?104:116;
+    RR(P,y,IN,bh,28,COD,CODB);
     if(cod>0){
-      T("COD AMOUNT DUE",P+26,y+58,"600 24px "+SANS,"#f9f6f0");
-      T("৳"+num(cod),W-P-26,y+63,"700 44px "+SER,"#ffffff","right");
+      T("COD amount due",P+28,y+62,"600 24px "+SANS,DEEP);
+      T("৳"+num(cod),W-P-28,y+68,"600 48px "+SANS,BLUE,"right");
     }else{
-      T("PAID IN FULL",W/2,y+52,"700 34px "+SER,"#ffffff","center");
-      T("No cash to collect",W/2,y+88,"400 20px "+SANS,"#e3eee9","center");
+      T("Paid in full",W/2,y+54,"600 36px "+SANS,BLUE,"center");
+      T("No cash to collect",W/2,y+92,"400 20px "+SANS,MUT,"center");
     }
-    y+=bh+44;
+    y+=bh+46;
     T("Thank you for shopping with Pozzo Toys",W/2,y,"400 20px "+SANS,MUT,"center");
-    return y+42;
+    return y+44;
   }
   const H=run(false);
   cv.width=W;cv.height=H;
-  cx.fillStyle="#f9f6f0";cx.fillRect(0,0,W,H);
+  cx.fillStyle="#FFFFFF";cx.fillRect(0,0,W,H);
   run(true);
   return cv;
 }
@@ -521,10 +536,11 @@ function memoPreview(){
     }catch(e){}
   },350);
 }
-async function showMemo(order,msg){
+async function showMemo(order,msg,stockPending){
   O=null;pvSeq++;$("#bar").hidden=true;window.scrollTo(0,0);
   MEMO={order:order,cv:null};
   $("#app").innerHTML=`${msg?`<div class="ok">${esc(msg)}</div>`:""}
+  ${stockPending?`<p id="stockline" class="hint" style="margin:0 4px 12px">Updating stock…</p>`:""}
   <div class="card"><h3>Cash memo</h3><p class="hint">The memo is not stored. You can rebuild it any time from the order ID.</p>
     <img id="memoimg" alt="Cash memo" style="width:100%;border:1px solid var(--line);border-radius:12px;min-height:120px">
     <div class="row" style="margin-top:14px"><button class="btn p" onclick="memoPng()">Download PNG</button><button class="btn p" onclick="memoPdf()">Download PDF</button></div>
@@ -596,8 +612,13 @@ async function parcelNext(){
   if(!j.ok)return pmsg("Could not get orders: "+errText(j.error));
   if(!j.orders.length)return pmsg("No new orders to export.");
   try{await parcelExcel(j.orders)}catch(e){return pmsg(e.message)}
+  const n=j.orders.length,span=j.orders[0].id+" to "+j.orders[n-1].id;
+  pmsg("The parcel file was made for "+n+" order"+(n>1?"s":"")+" ("+span+"). They are not marked as exported yet.");
+  if(!confirm("Did the parcel file download?\n\nOK = yes, mark these "+n+" order"+(n>1?"s":"")+" as exported.\nCancel = not yet. They stay unmarked and appear again next time.")){
+    return pmsg("Not marked. The "+n+" order"+(n>1?"s":"")+" ("+span+") will be included again the next time you generate the file.");
+  }
   const mk=await callScript({action:"mark",ids:j.orders.map(o=>o.id),today:today()});
-  pmsg("Generated "+j.orders.length+" order"+(j.orders.length>1?"s":"")+": "+j.orders[0].id+" to "+j.orders[j.orders.length-1].id+"."+(mk.ok?"":" Warning: they could not be marked as exported ("+mk.error+"), so the next file may include them again."));
+  pmsg("Generated and marked "+n+" order"+(n>1?"s":"")+": "+span+"."+(mk.ok?"":" Warning: they could not be marked as exported ("+mk.error+"), so the next file may include them again."));
 }
 async function parcelRange(){
   const f=$("#pf").value.trim(),t=$("#pt").value.trim();
