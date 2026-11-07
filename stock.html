@@ -672,7 +672,7 @@ ui.confirmPurchase=async()=>{
     lines.push(Object.assign({},u,c.pid?{pid:c.pid}:{letters:c.letters}));
   }
   const btn=document.querySelector(".acts .btn.p");if(btn){btn.disabled=true;btn.textContent="Saving…"}
-  const j=await api({action:"purchase",reqId:PLAN.req,date:PUR.date,supplier:PUR.sup,lines:lines});
+  const j=await api({action:"purchase",reqId:PLAN.req,date:PUR.date,supplier:PLAN.sup,lines:lines});
   if(!j.ok){if(btn){btn.disabled=false;btn.textContent="✓ Confirm all and save"}return bad(errText(j.error))}
   postStockDirty();
   if(j.repeat)toast("This purchase was already saved. Nothing was added twice.");
