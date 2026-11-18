@@ -153,12 +153,13 @@ html.dark .warn{border-color:#5a4320;color:#f3c87c}
 html.dark .warn.bad{border-color:#69322b;color:#f59b87}
 .err{color:var(--bad);font-size:14.5px;margin:0 0 12px}
 .ok{background:var(--bd);color:var(--grn);border-radius:16px;padding:12px 14px;margin-bottom:14px;line-height:1.45}
+@page{size:auto;margin:0}
 @media print{
-  body{background:#fff!important;color:#1c1b1f!important;padding:0;margin:0}
-  header,.bar,#ptr,.top,.hint,button,.row,.card h3,#mmsg,.ver{display:none!important}
-  main{max-width:100%;padding:0;margin:0}
-  .card{border:0;box-shadow:none;padding:0;margin:0;background:#fff!important}
-  #memoimg{border:0;border-radius:0;width:100%;max-width:100%;height:auto;display:block}
+  html,body{background:#fff!important;color:#1c1b1f!important;padding:4mm!important;margin:0!important}
+  header,.bar,#ptr,.top,.hint,button,.row,.card h3,#mmsg,.ver,.ok,.flash,.warn,.err,#themeModal{display:none!important}
+  main{max-width:100%!important;width:100%!important;padding:0!important;margin:0!important}
+  .card{border:0!important;box-shadow:none!important;padding:0!important;margin:0!important;background:#fff!important}
+  #memoimg{border:0!important;border-radius:0!important;width:100%!important;max-width:100%!important;max-height:calc(100vh - 10mm)!important;object-fit:contain!important;height:auto!important;display:block!important;margin:0 auto!important;break-inside:avoid;page-break-inside:avoid}
 }
 .ver{text-align:center;color:var(--mut);font-size:13px;margin:14px 0 0}
 </style>
